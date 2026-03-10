@@ -1,83 +1,81 @@
+import os
+import pickle
 import streamlit as st
 import pandas as pd
-import numpy as np
-import pickle
-import plotly.express as px
 
-# ------------------------------
-# Load pre-trained ML model
-# ------------------------------
-model = pickle.load(open("crop_yield_model.pkl", "rb"))
+# -----------------------------
+# Config
+# -----------------------------
+st.set_page_config(page_title="Smart Crop Yield Prediction", layout="wide")
+MODEL_PATH = "crop_yield_model.pkl"
+DATA_PATH = "final_crop_dataset.csv"
 
-# ------------------------------
-# Load dataset
-# ------------------------------
-df = pd.read_csv("final_crop_dataset.csv")
+# -----------------------------
+# Model Check
+# -----------------------------
+if not os.path.exists(MODEL_PATH):
+    st.warning(
+        "⚠️ Model file not found!\n"
+        "Please download 'crop_yield_model.pkl' from Google Drive and place it in this folder.\n\n"
+        "[Download here](https://drive.google.com/file/d/1Yx_Ew5qDdLjmk7mGb3tcGnCKdILBS_pS/view?usp=sharing)"
+    )
+    st.stop()
 
-# Extract one-hot encoded columns
-area_cols = [col for col in df.columns if col.startswith("Area_")]
-item_cols = [col for col in df.columns if col.startswith("Item_")]
+with open(MODEL_PATH, "rb") as f:
+    model = pickle.load(f)
 
-# ------------------------------
-# Streamlit UI
-# ------------------------------
-st.title("🌱 Smart Crop Yield Prediction System")
+# -----------------------------
+# Load Dataset for Reference
+# -----------------------------
+if os.path.exists(DATA_PATH):
+    df = pd.read_csv(DATA_PATH)
+else:
+    df = pd.DataFrame()  # empty dataframe if CSV missing
 
-# Select Country
-country = st.selectbox("Select Country", [c.replace("Area_","") for c in area_cols])
+# -----------------------------
+# Sidebar Inputs
+# -----------------------------
+st.sidebar.header("Input Parameters")
 
-# Select Crop
-crop = st.selectbox("Select Crop", [c.replace("Item_","") for c in item_cols])
+# Example inputs: adjust based on your dataset columns
+year = st.sidebar.number_input("Year", min_value=int(df['Year'].min()) if not df.empty else 2000,
+                               max_value=int(df['Year'].max()) if not df.empty else 2030,
+                               value=2025)
+area = st.sidebar.selectbox("Area", sorted(df['Area'].unique()) if 'Area' in df.columns else ["Pakistan"])
+crop = st.sidebar.selectbox("Crop", sorted(df['Item'].unique()) if 'Item' in df.columns else ["Wheat"])
+rainfall = st.sidebar.number_input("Average Rainfall (mm)", min_value=0.0, value=500.0)
+temperature = st.sidebar.number_input("Average Temperature (°C)", min_value=-10.0, value=25.0)
+pesticide = st.sidebar.number_input("Pesticide Usage (units)", min_value=0.0, value=10.0)
 
-# Input numeric features
-rainfall = st.number_input("Rainfall (mm)", min_value=0.0, value=100.0)
-temperature = st.number_input("Temperature (°C)", min_value=-10.0, value=25.0)
-pesticide = st.number_input("Pesticide Usage (kg/ha)", min_value=0.0, value=50.0)
+# -----------------------------
+# Prediction Button
+# -----------------------------
+if st.sidebar.button("Predict Crop Yield"):
+    # Prepare input for model: match your feature engineering
+    input_df = pd.DataFrame({
+        'Year': [year],
+        'Rainfall': [rainfall],
+        'Temperature': [temperature],
+        'Pesticide': [pesticide],
+        'Area_' + area: [1],  # one-hot encoding simulation
+        'Item_' + crop: [1]
+    })
 
-# ------------------------------
-# Prediction
-# ------------------------------
-if st.button("Predict Yield"):
-    # Create input vector
-    input_data = pd.DataFrame(columns=df.drop("Yield", axis=1).columns)
-    input_data.loc[0] = 0  # initialize all zeros
-
-    # Fill numeric values
-    input_data.at[0, "Rainfall"] = rainfall
-    input_data.at[0, "Temperature"] = temperature
-    input_data.at[0, "Pesticide"] = pesticide
-
-    # Set one-hot encoded features
-    input_data.at[0, "Area_" + country] = 1
-    input_data.at[0, "Item_" + crop] = 1
+    # Ensure all model features exist in input
+    for col in model.feature_names_in_:
+        if col not in input_df.columns:
+            input_df[col] = 0  # add missing columns as 0
 
     # Predict
-    pred = model.predict(input_data)[0]
-    st.success(f"Predicted Yield: {pred:.2f} tons/hectare")
+    pred = model.predict(input_df)[0]
+    st.success(f"🌾 Predicted Crop Yield: {pred:.2f} units")
 
-# ------------------------------
-# Global Yield Map
-# ------------------------------
-st.subheader("🌍 Global Crop Yield Map")
+# -----------------------------
+# Data Exploration (Optional)
+# -----------------------------
+st.header("Dataset Overview")
+st.dataframe(df.head(10))
 
-# Compute average yield per country
-yield_map = []
-for col in area_cols:
-    mean_yield = df.loc[df[col] == 1, "Yield"].mean()
-    country_name = col.replace("Area_", "")
-    yield_map.append({"Country": country_name, "Yield": mean_yield})
-
-yield_map_df = pd.DataFrame(yield_map)
-
-# Plot interactive map
-fig = px.choropleth(
-    yield_map_df,
-    locations="Country",
-    locationmode="country names",
-    color="Yield",
-    hover_name="Country",
-    color_continuous_scale="Viridis",
-    title="Global Crop Yield Distribution"
-)
-
-st.plotly_chart(fig, use_container_width=True)
+st.header("Yield Distribution")
+if not df.empty and 'Yield' in df.columns:
+    st.bar_chart(df.groupby('Item')['Yield'].mean())
